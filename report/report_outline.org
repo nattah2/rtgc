@@ -1,0 +1,37 @@
+#+title: Report Outline
+
+* Introduction
+Motivation,
+goal,
+scope.
+
+* Background
+** Towards an Analysis of Garbage Collection Techniques for Embedded Real-Time Java Systems
+*** Conservative Scanning
+"Real-time garbage collection must assure memory avail- ability for newly created objects without interfering with the real-time constraints
+
+Sun JDK and SDK use a mark-and-sweep GC that compacts the heap, avoiding fragmentation.
+
+"This implies degradation of real-time guarantee" since you need to compact ocassionally.
+
+However, each object has a non-moving handle that points to the location of the object header. When an object is relocated, its handle is updated. Heap is organized into two sections - handle space and object space.
+
+HotSpot JVM provides an accurate GC - no object handles. Collector finds and updates all references to object when it's relocated. Bad for performancne
+*** Simple Garbage Collection
+The GC of standard Java runs as a low-priority back- ground thread.
+
+If some thread requests memory, GC is scheduled for execution, leading to suspend all other threads.
+
+GC also runs when there is no memory space left to handle application
+* System Design
+Requirements: What the garbage collector must achieve (deterministic behavior, low latency, efficient memory reuse).
+
+** Memory Allocator: Explanation of the custom allocator (sequential allocation vs. free list).
+** Garbage Collection Strategy: Which algorithm is used and
+** Real-Time Considerations: How to ensure bounded execution time.
+* Implementation
+** Allocator
+** Garbage Collection
+* Evaluation and Testing
+
+* Conclusion

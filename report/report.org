@@ -1,0 +1,12 @@
+#+title: Report
+
+Real-time programs are programs with time constraints. However, despite the modern expectation that programs manage memory automatically,
+
+* Outline
+* Introduction
+Results must not only be accurate, they must also meet deadlines. Unfortunately, automatic memory management (i.e. garbage collection) is a major obstacle towards this end; because it operates without the programmer's direction, garbage collection can cause unexpected pauses or delays that may cause an otherwise well-designed program to fail to meet its deadline. Therefore,
+* Overview of Garbage Collection
+Garbage collection is the art of automatic memory management. There's two halves to this that must be addressed. Firstly, the actual allocation of memory, which is performed by the /allocator/ and then the reclamation of that memory, which is known as the /garbage collector/.
+** Allocator Techniques
+** I don't want to live anymore.
+* Survey of Techniques

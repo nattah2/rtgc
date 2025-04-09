@@ -1,0 +1,83 @@
+#+title: Allocator
+
+See:
+https://arjunsreedharan.org/post/148675821737/memory-allocators-101-write-a-simple-memory
+
+https://dev.to/naens/generalized-fibonacci-memory-allocator-2fja
+
+https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=1019184
+
+* Design Notes
+** Introduction to Buddy System
+~tb_malloc()~ is based on the buddy system.
+
+In a buddy system, the heap is recursively divided up into smaller blocks.
+
+When an allocation request is made, the requested size is rounded up to the closest block size in the hierarchy of blocks.
+
+A block's buddy is the other block at the same level of the hierarchy. A freed block can only be freed with its buddy.
+
+The generalized fibonacci allocator.
+
+Fibonacci buddy allocator, in which block sizes are members of a Fibonacci series
+** Fibonacci System Explanation
+In the buddy system, if min-size is 4 and if 9 kB of memory is requested, the allocator returns 12 kb (3 * 4)
+Fibonacci numbers satisfy the recursive relation F(k) = F(k - 1) + F(k - 2).
+Includes 1, 2, 3, 5, 8, 13, 21.
+
+#+begin_src python
+def f(n):
+        a, b = 0, 1
+        for i in range(0, n):
+                a, b = b, a + b
+                a = b
+                b = _temp + a
+        return a
++end_src
+** Worst-Case Allocation
+From
+
+** Worst-Case Deallocation
+
+* Code Notes
+This line ensures the total size is th smallest multiple of 16 that's greater than ~size~ + ~sizeof(header_t)~ (i.e. the size of the memory block being requested and the size of the header combined). The way this works is that you add 15, pushing it to the next 16 bits, then rounding down by clearing the last 4 bits. So you'd get something like ~1110000~ which we know is divisible by 16.
+#+begin_src c
+size = (size + sizeof(header_t) + 15) & ~15;
+#+end_src
+
+* ~tb_malloc~
+#+begin_src cpp
+/**
+ ,* Allocates a block of memory.
+ ,*
+ ,* @param size The size of the block to allocate.
+ ,* @return A pointer to allocated memory, or NULL on failure.
+ ,*/
+
+void* heap = mmap(NULL, HEAP_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+pthread_mutex_t global_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_lock(&global_mutex);
+ #+end_src
+
+* The buddy System
+All blocks must be of length 1, 2, 4, 8, or 16. If a block (ie. requested memory) isn't 2^{k} long, then we choose the next highest power of 2.
+
+#+begin_src c
+unsigned int next_highest_power_of_2(unsigned int v) {
+        v--;
+        v |= v >> 1;
+        v |= v >> 2;
+        v |= v >> 4;
+        v |= v >> 8;
+        v |= v >> 16;
+        v++;
+}
+#+end_src
+
+Then, if we request a block of a size that isn't available, a larger block is split into two *buddies*. If both buddies are available, then they coalesce into a single block.
+
+If we know the location of a block and its size, we also know the location of its buddy.
+"To find the 'buddy' of a block, you XOR the block's address with the block's size (which is a power of 2)."
+
+101110010100000
+101110010100000.

@@ -1,0 +1,87 @@
+#+title: Project
+
+Steps for the project:
+* 1. Allocator
+Build an ~allocator~
+This should implement ~alloc~ and ~free~.
+This should implement memory block tracking?
+This should include simple metadata for each allocated block.
+* 2. Scheduling Components
+** Introduction
+1. Build a scheduler
+   This determines when garbage collection work happens and how much work can be done.
+   It should ensure GC works happens during appropriate times (idle periods, noncritical work, or certain memory pressure thresholds).
+   #+begin_src c
+        void gc_process_work_slice() {
+        uint64_t start_time = get_current_time_us();
+
+        // Only do a limited amount of work per slice
+        while (!work_complete &&
+                get_current_time_us() - start_time < MAX_SLICE_TIME_US) {
+                process_next_object();
+        }
+        }
+   #+end_src
+** Preemption Control
+#+begin_src cpp
+if (critical_event_pending()) {
+    // Save GC state and yield immediately
+    save_gc_state();
+    return;
+}
+#+end_src
+** Statistics Collection
+#+begin_src cpp
+void record_gc_pause(uint64_t duration_us) {
+    timing_stats.total_pause_time += duration_us;
+    timing_stats.max_pause = MAX(timing_stats.max_pause, duration_us);
+    timing_stats.pause_count++;
+}
+#+end_src
+** Real-Time Guarantees
+#+begin_src cpp
+if (get_current_time_us() - start_time > CRITICAL_THRESHOLD_US) {
+    emergency_gc_yield();
+    return GC_YIELD_CRITICAL;
+}
+#+end_src
+* 3. Object Graph
+
+1. Build an ~object_graph.c~
+   This defines how objects are represented in memory. It implements reference tracking mechanisms and defines data structures to efficiently track object relationships.
+* 4. Garbage Collector
+#+begin_src cpp
+#ifndef GC_H
+#define GC_H
+
+void gc_init();          // Initialize the GC
+void *gc_malloc(size_t size); // Allocate memory
+void gc_collect();       // Trigger garbage collection
+void gc_shutdown();      // Clean up GC resources
+
+#endif
+#+end_src
+
+#+begin_src cpp
+#include "gc.h"
+#include <stdlib.h>
+#include <stdio.h>
+
+void *gc_malloc(size_t size) {
+    void *ptr = malloc(size);
+    if (!ptr) {
+        gc_collect();
+        ptr = malloc(size);
+        if (!ptr) {
+            fprintf(stderr, "Out of memory!\n");
+            exit(1);
+        }
+    }
+    return ptr;
+}
+
+void gc_collect() {
+    printf("Collecting garbage...\n");
+    // Mark & Sweep logic goes here
+}
+#+end_src
