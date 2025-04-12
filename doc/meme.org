@@ -1,0 +1,174 @@
+#+title: Meme
+
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <pthread.h>
+#include <unistd.h>
+
+#define MAX_TRACKED_OBJECTS 1024
+
+typedef struct object {
+    bool marked;
+    size_t child_count;
+    struct object **children; // pointer to array of child pointers
+    // payload follows...
+} object_t;
+
+static object_t *gc_tracked_objects[MAX_TRACKED_OBJECTS];
+static size_t gc_tracked_count = 0;
+
+// Mark stack
+static object_t *mark_stack[MAX_TRACKED_OBJECTS];
+static size_t mark_top = 0;
+
+static bool gc_in_progress = false;
+static bool gc_mark_phase = false;
+static size_t sweep_index = 0;
+
+// Tracking roots
+static object_t **gc_roots[MAX_TRACKED_OBJECTS];
+static size_t gc_root_count = 0;
+
+// GC thread management
+static pthread_t gc_thread;
+static bool gc_thread_running = false;
+static size_t gc_work_units = 10;
+
+void gc_add_root(object_t **root) {
+    if (gc_root_count < MAX_TRACKED_OBJECTS) {
+        gc_roots[gc_root_count++] = root;
+    }
+}
+
+void gc_register(object_t *obj) {
+    if (gc_tracked_count < MAX_TRACKED_OBJECTS) {
+        gc_tracked_objects[gc_tracked_count++] = obj;
+    }
+}
+
+void push_mark_stack(object_t *obj) {
+    if (mark_top < MAX_TRACKED_OBJECTS) {
+        mark_stack[mark_top++] = obj;
+    }
+}
+
+object_t *pop_mark_stack() {
+    return (mark_top > 0) ? mark_stack[--mark_top] : NULL;
+}
+
+void mark_object(object_t *obj) {
+    if (obj && !obj->marked) {
+        obj->marked = true;
+        push_mark_stack(obj);
+    }
+}
+
+void gc_start() {
+    gc_in_progress = true;
+    gc_mark_phase = true;
+    mark_top = 0;
+    sweep_index = 0;
+
+    for (size_t i = 0; i < gc_root_count; i++) {
+        mark_object(*gc_roots[i]);
+    }
+}
+
+void gc_mark_step(size_t max_objects) {
+    size_t count = 0;
+    while (mark_top > 0 && count < max_objects) {
+        object_t *obj = pop_mark_stack();
+        for (size_t i = 0; i < obj->child_count; i++) {
+            mark_object(obj->children[i]);
+        }
+        count++;
+    }
+    if (mark_top == 0) {
+        gc_mark_phase = false; // switch to sweep phase
+    }
+}
+
+void gc_sweep_step(size_t max_objects) {
+    size_t count = 0;
+    while (sweep_index < gc_tracked_count && count < max_objects) {
+        object_t *obj = gc_tracked_objects[sweep_index];
+        if (obj && !obj->marked) {
+            tb_free(obj);
+            gc_tracked_objects[sweep_index] = NULL;
+        } else if (obj) {
+            obj->marked = false;
+        }
+        sweep_index++;
+        count++;
+    }
+    if (sweep_index >= gc_tracked_count) {
+        gc_in_progress = false;
+    }
+}
+
+void gc_step(size_t work_units) {
+    if (!gc_in_progress) return;
+    if (gc_mark_phase) {
+        gc_mark_step(work_units);
+    } else {
+        gc_sweep_step(work_units);
+    }
+}
+
+object_t *gc_alloc(size_t child_count) {
+    size_t total_size = sizeof(object_t) + child_count * sizeof(object_t*);
+    object_t *obj = (object_t *)tb_malloc(total_size);
+    if (!obj) return NULL;
+
+    memset(obj, 0, total_size);
+    obj->child_count = child_count;
+    obj->children = (object_t **)(obj + 1);
+
+    gc_register(obj);
+    if (gc_in_progress) {
+        gc_step(10);
+    }
+    return obj;
+}
+
+void gc_write_barrier(object_t *parent, object_t *child, size_t index) {
+    if (gc_in_progress && gc_mark_phase && child && !child->marked) {
+        mark_object(child);
+    }
+    parent->children[index] = child;
+}
+
+// Background GC thread
+void *gc_background_thread(void *arg) {
+    while (gc_thread_running) {
+        if (gc_in_progress) {
+            gc_step(gc_work_units);
+        } else {
+            gc_start();
+        }
+        usleep(1000); // sleep for 1ms between steps
+    }
+    return NULL;
+}
+
+void gc_start_thread() {
+    gc_thread_running = true;
+    pthread_create(&gc_thread, NULL, gc_background_thread, NULL);
+}
+
+void gc_stop_thread() {
+    gc_thread_running = false;
+    pthread_join(gc_thread, NULL);
+}
+
+// Example of use:
+// object_t *a = gc_alloc(2);
+// gc_add_root(&a);
+// object_t *b = gc_alloc(0);
+// gc_write_barrier(a, b, 0);
+// gc_start_thread();  // Start background GC
+// ... use objects ...
+// gc_stop_thread();   // Stop GC before program exits

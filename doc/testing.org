@@ -1,3 +1,0 @@
-#+title: Testing
-
-As a reminder, the overall goal of the project is to implement a real-time garbage collection scheme to better understand the techniques that go into such a task, and compare it to an existing real-time garbage collector.

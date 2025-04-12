@@ -1,106 +1,272 @@
-#include "tb_allocator.h"
-
-#include <stdlib.h>
-#include <stdio.h>
+#include <stddef.h>
 #include <pthread.h>
-#include <glibc.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <stdint.h>
+#include <math.h>
+#include <string.h>
+#include <stdio.h>
 
-typedef char ALIGN[16];
-
+#define ALIGNMENT 16
 #define HEADER_SIZE sizeof(header_t)
 
-#define MIN_BLOCK_SIZE 32
-#define MIN_BLOCK_SIZE 1 << 20
-#define MAX_LEVELs 7
+#define HEAP_SIZE (1 << 20)  // 1MB heap
+#define MIN_BLOCK_SIZE (1 << 5)  // 32 bytes
+#define MAX_BLOCK_SIZE (1 << 20) // 1MB
+#define LEVELS (__builtin_ctz(MAX_BLOCK_SIZE) - __builtin_ctz(MIN_BLOCK_SIZE) + 1)
 
-extern header_t* head = NULL, *tail = NULL;
-static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-/* struct Block { */
-/*     struct Block* next; // Pointer to next free block */
-/* }; */
-header_t* free_lists[MAX_LEVELS];
+// Special header for oversized allocations
+typedef struct oversized_header {
+    size_t size;
+    unsigned is_free;
+    void* address;  // Original mmap address
+    struct oversized_header* next;
+} oversized_header_t;
 
-header_t *tb_find_free_block(size_t size) {
-   header_t* curr = head;
-   while (curr) {
-       if (curr->s.is_free && curr->s.size >= size) {
-           return curr;
-       }
-       curr = curr->s.next;
-   }
-   return NULL;
+typedef union header {
+    struct {
+        size_t size;
+        unsigned is_free;
+        union header *next;
+    } s;
+    uint8_t padding[ALIGNMENT];
+} header_t;
+
+static header_t* free_lists[LEVELS] = { NULL };
+static oversized_header_t* oversized_blocks = NULL;
+static pthread_mutex_t allocator_lock = PTHREAD_MUTEX_INITIALIZER;
+static void* base_address = NULL;
+static int allocator_initialized = 0;
+
+static inline size_t align_up(size_t size) {
+    return (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
 }
 
-static header_t* tb_request_memory(size_t size) {
-    void* block = srbk(0); // Get current heap break
-    if (sbrk(size) == (void*)-1)
-        return null;
-    header_t* hdr = (header_t*) block;
-    hdr->s.size = size;
-    hdr->s.is_free = 0;
-    hdr->s.next = NULL;
-
-    // thread unsafe??
-    if (!head)
-        head = hdr;
-    if (tail)
-        tail->s.next = hdr;
-    tail = hdr;
-    return hdr;
-}
-
-size_t size_to_level(size):
-    order = ceil(log2(total_size));  // Round up to next power of 2
-    if order < MIN_ORDER{
-        order = MIN_ORDER
+static int size_to_level(size_t size) {
+    size_t actual_size = align_up(size + HEADER_SIZE);
+    int level = 0;
+    size_t block_size = MIN_BLOCK_SIZE;
+    while (block_size < actual_size && level < LEVELS - 1) {
+        block_size <<= 1;
+        level++;
     }
-    return order
+    return level;
 }
 
-void *tb_malloc(size_t size) {
-    // Sanity check - make sure we get something usable
+static size_t level_to_size(int level) {
+    return MIN_BLOCK_SIZE << level;
+}
+
+void* tb_request_memory(size_t size) {
+    void *block = mmap(NULL, size, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return block == MAP_FAILED ? NULL : block;
+}
+
+void tb_initialize_allocator() {
+    if (allocator_initialized) return;
+
+    void *heap = tb_request_memory(HEAP_SIZE);
+    if (!heap) {
+        perror("Failed to initialize memory allocator");
+        return;
+    }
+    base_address = heap;
+
+    header_t *block = (header_t*)heap;
+    block->s.size = HEAP_SIZE - HEADER_SIZE;
+    block->s.is_free = 1;
+    block->s.next = NULL;
+
+    free_lists[LEVELS - 1] = block;
+    allocator_initialized = 1;
+}
+
+// Handle large allocations that exceed MAX_BLOCK_SIZE
+void* tb_malloc_large(size_t size) {
+    // Allocate memory for both the header and the requested size
+    size_t total_size = size + sizeof(oversized_header_t);
+    void* mem = tb_request_memory(total_size);
+    if (!mem) return NULL;
+
+    // Setup the oversized header
+    oversized_header_t* header = (oversized_header_t*)mem;
+    header->size = size;
+    header->is_free = 0;
+    header->address = mem;  // Store the original pointer for freeing later
+
+    // Add to the oversized blocks list
+    pthread_mutex_lock(&allocator_lock);
+    header->next = oversized_blocks;
+    oversized_blocks = header;
+    pthread_mutex_unlock(&allocator_lock);
+
+    // Return the usable memory area
+    return (void*)(header + 1);
+}
+
+void* tb_malloc(size_t size) {
     if (!size) return NULL;
-    // Find the smallest power of 2 size that can hold both a header and
-    total_size = (size + HEADER_SIZE + 15) & ~15;
-    // Find a free block (sequentially allocated?)
-    pthread_mutex_lock(&lock);
-    header_t* block = tb_find_free_block(total_size);
-    // If we find one then mark it as unfree?
-    if (block) {
-        block->s.is_free = 0;
-        pthread_mutex_unlock(&lock);
-        return (void*)(block + 1); // Return memory after the header.
+
+    // Initialize allocator if not already done
+    if (!allocator_initialized) {
+        tb_initialize_allocator();
+        if (!allocator_initialized) return NULL;
     }
-    // If we get here, then we didn't find a free space.
-    block = tb_request_memory(total_size);
-    if (!block) {
-    return null
+
+    // Check if allocation is too large for the buddy system
+    if (size > MAX_BLOCK_SIZE - HEADER_SIZE) {
+        return tb_malloc_large(size);
     }
-    else {
-        block->s.is_free = 0;
+
+    pthread_mutex_lock(&allocator_lock);
+
+    int level = size_to_level(size);
+    int i = level;
+    while (i < LEVELS && free_lists[i] == NULL) i++;
+
+    if (i == LEVELS) {
+        pthread_mutex_unlock(&allocator_lock);
+        return NULL;
     }
-    // If no free block is found, request more memory.
-    // If requesting more memory doesn't work, then return null;
-    return (void*)(block + 1); // Return memory after the header.
+
+    header_t *block = free_lists[i];
+    free_lists[i] = block->s.next;
+    size_t block_size = level_to_size(i);
+
+    while (i > level) {
+        i--;
+        block_size >>= 1;
+        header_t *buddy = (header_t*)((char*)block + block_size);
+        buddy->s.size = block_size - HEADER_SIZE;
+        buddy->s.is_free = 1;
+        buddy->s.next = free_lists[i];
+        free_lists[i] = buddy;
+    }
+
+    block->s.size = level_to_size(level) - HEADER_SIZE;
+    block->s.is_free = 0;
+    pthread_mutex_unlock(&allocator_lock);
+    return (void*)(block + 1);
 }
 
-void tb_free(void* ptr) {
+// Free a large allocation
+void tb_free_large(oversized_header_t* header) {
+    pthread_mutex_lock(&allocator_lock);
+
+    // Remove from the oversized blocks list
+    oversized_header_t** pp = &oversized_blocks;
+    while (*pp && *pp != header) {
+        pp = &(*pp)->next;
+    }
+
+    if (*pp) {
+        *pp = header->next;
+    }
+
+    pthread_mutex_unlock(&allocator_lock);
+
+    // Return the memory to the OS
+    munmap(header->address, header->size + sizeof(oversized_header_t));
+}
+
+void tb_free(void *ptr) {
     if (!ptr) return;
-    pthread_mutex_lock(&lock);
-    header_t* hdr = (header_t*)ptr - 1;
-    hdr->s.is_free = 1;
-    // Coalesce with next block if free
-    if (hdr->s.next && hdr->s.next->s.is_free) {
-        hdr->s.size += HEADER_SIZE + hdr->s.next->s.size;
-        hdr->s.next = hdr->s.next->s.next;
+
+    // Check if this might be a large allocation
+    uintptr_t ptr_addr = (uintptr_t)ptr;
+    if (ptr_addr < (uintptr_t)base_address ||
+        ptr_addr >= (uintptr_t)base_address + HEAP_SIZE) {
+
+        // This is likely a large allocation
+        oversized_header_t* header = (oversized_header_t*)ptr - 1;
+
+        // Validate that this is indeed one of our oversized blocks
+        pthread_mutex_lock(&allocator_lock);
+        oversized_header_t* curr = oversized_blocks;
+        int is_valid = 0;
+
+        while (curr) {
+            if (curr == header) {
+                is_valid = 1;
+                break;
+            }
+            curr = curr->next;
+        }
+        pthread_mutex_unlock(&allocator_lock);
+
+        if (is_valid) {
+            tb_free_large(header);
+            return;
+        }
+        // If not valid, fall through to regular free
     }
-    pthread_mutex_unlock(&lock);
+
+    header_t *block = (header_t*)ptr - 1;
+    size_t block_size = block->s.size + HEADER_SIZE;
+    int level = size_to_level(block->s.size);
+
+    pthread_mutex_lock(&allocator_lock);
+    block->s.is_free = 1;
+
+    while (level < LEVELS - 1) {
+        uintptr_t offset = (uintptr_t)block - (uintptr_t)base_address;
+        uintptr_t buddy_offset = offset ^ block_size;
+        header_t *buddy = (header_t*)((uintptr_t)base_address + buddy_offset);
+
+        if ((uintptr_t) buddy < (uintptr_t) base_address ||
+            (uintptr_t) buddy >= (uintptr_t)base_address + HEAP_SIZE ||
+            !buddy->s.is_free || buddy->s.size != block->s.size) {
+            break;
+        }
+
+        header_t **prev = &free_lists[level];
+        while (*prev && *prev != buddy) {
+            prev = &(*prev)->s.next;
+        }
+        if (*prev == buddy) {
+            *prev = buddy->s.next;
+        } else {
+            break;
+        }
+
+        if ((uintptr_t)block > (uintptr_t)buddy) {
+            block = buddy;
+        }
+        block_size <<= 1;
+        block->s.size = block_size - HEADER_SIZE;
+        level++;
+    }
+
+    block->s.next = free_lists[level];
+    free_lists[level] = block;
+    pthread_mutex_unlock(&allocator_lock);
 }
 
-void *tb_calloc(size_t size) {
-    return;
-}
+// Function to clean up the allocator (useful for preventing memory leaks)
+void tb_cleanup_allocator() {
+    pthread_mutex_lock(&allocator_lock);
 
-void *tb_realloc(size_t size) {
-    return;
+    // Free all oversized blocks
+    oversized_header_t* curr = oversized_blocks;
+    while (curr) {
+        oversized_header_t* next = curr->next;
+        munmap(curr->address, curr->size + sizeof(oversized_header_t));
+        curr = next;
+    }
+    oversized_blocks = NULL;
+
+    // Free the main heap
+    if (base_address) {
+        munmap(base_address, HEAP_SIZE);
+        base_address = NULL;
+    }
+
+    // Reset free lists
+    for (int i = 0; i < LEVELS; i++) {
+        free_lists[i] = NULL;
+    }
+
+    allocator_initialized = 0;
+    pthread_mutex_unlock(&allocator_lock);
 }

@@ -4,46 +4,32 @@
 # @file
 # @version 0.1
 
+# Root Makefile
 CC = gcc
-CFLAGS = -Wall -Wextra -I src  # Add -I src to include headers
-LDFLAGS =
+CXX = g++
+CFLAGS = -Wall -Wextra -O2 -g -Isrc
+CXXFLAGS = $(CFLAGS) -std=c++11
+LDFLAGS = -lpthread
 
-# Directories
+# Targets
+TARGET = bin/test_gc
 SRC_DIR = src
-TEST_DIR = test
-BUILD_DIR = build
+BIN_DIR = bin
 
-# Source and test files
-SRC_FILES = $(wildcard $(SRC_DIR)/*.c)
-OBJ_FILES = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRC_FILES))
-TEST_FILES = $(wildcard $(TEST_DIR)/*.c)
+# Source files
+SOURCES = $(wildcard $(SRC_DIR)/*.c)
+OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(BIN_DIR)/%.o,$(SOURCES))
 
-# Output binaries
-TARGET = program
-TEST_TARGET = test_runner
+# Ensure bin directory exists
+$(shell mkdir -p $(BIN_DIR))
 
-# Create build directory if not exists
-$(shell mkdir -p $(BUILD_DIR))
+$(TARGET): $(OBJECTS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-# Default target
-all: $(TARGET)
-
-# Compile source files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+$(BIN_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Link the final program
-$(TARGET): $(OBJ_FILES)
-	$(CC) $(LDFLAGS) $^ -o $@
-
-# Compile and run tests
-test: $(OBJ_FILES)
-	$(CC) $(CFLAGS) $(TEST_FILES) $(OBJ_FILES) -o $(TEST_TARGET)
-	./$(TEST_TARGET)
-
-# Clean build files
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET) $(TEST_TARGET)
+	rm -rf $(BIN_DIR)
 
-
-# end
+.PHONY: all clean
