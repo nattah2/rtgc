@@ -7,7 +7,7 @@
 # Root Makefile
 CC = gcc
 CXX = g++
-CFLAGS = -Wall -Wextra -O2 -g -Isrc
+CFLAGS = -Wall -Wextra -O0 -g -Isrc
 CXXFLAGS = $(CFLAGS) -std=c++11
 LDFLAGS = -lpthread
 

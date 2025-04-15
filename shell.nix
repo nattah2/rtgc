@@ -11,6 +11,7 @@ pkgs.mkShell {
     glibc
     time
     gnuplot
+    gdb
     openjdk17   # or openjdk21 if you prefer the latest with ZGC
   ];
 

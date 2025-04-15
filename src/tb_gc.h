@@ -37,6 +37,7 @@ void gc_add_root(object_t *obj);
  * @param obj Pointer to an object.
  */
 void gc_remove_root(object_t *obj);
+int findObj(object_t *obj);
 
 /**
  * Performs a full garbage collection (mark and sweep).
@@ -56,6 +57,7 @@ void gc_collect_step(void);
  * @param child  The new child object.
  */
 void gc_write_barrier(object_t *parent, size_t slot, object_t *child);
+
 
 #ifdef __cplusplus
 }

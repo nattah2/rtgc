@@ -1,8 +1,3 @@
-/*
-
-
-/* ========================= GARBAGE COLLECTOR DEFINITIONS ========================= */
-
 #ifndef TB_GC_H
 #define TB_GC_H
 
@@ -13,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <stdio.h>
 
 typedef struct object {
     size_t size;
@@ -49,6 +45,7 @@ void gc_add_root(object_t *obj) {
         root_set[root_count++] = obj;
     }
     pthread_mutex_unlock(&gc_lock);
+    //printf("[DEBUG] Added root %p. Total roots: %zu\n", obj, root_count);
 }
 
 void gc_remove_root(object_t *obj) {
@@ -92,6 +89,15 @@ void *gc_alloc(size_t size, size_t child_slots) {
     return (void*)(obj->children + child_slots);
 }
 
+static int is_tracked_object(object_t *obj) {
+    object_t *curr = all_objects;
+    while (curr) {
+        if (curr == obj) return 1;
+        curr = curr->next_object;
+    }
+    return 0;
+}
+
 static void push_mark_stack(object_t *obj) {
     if (mark_top < MARK_STACK_SIZE) {
         mark_stack[mark_top++] = obj;
@@ -117,7 +123,9 @@ static object_t *pop_mark_stack(void) {
 }
 
 static void mark_object(object_t *obj) {
-    if (!obj || obj->marked) return;
+    if (!obj || obj->marked || !is_tracked_object(obj)) {
+        return;
+    };
 
     obj->marked = 1;
     push_mark_stack(obj);
@@ -176,8 +184,18 @@ void gc_collect_step(void) {
 }
 
 void gc_collect_full(void) {
-    // Full garbage collection cycle
+    printf("=== Starting GC ===\n");
+
     mark_phase();
+
+    // Print marking results BEFORE sweep
+    /* printf("Marked objects:\n"); */
+    object_t *obj = all_objects;
+    while (obj) {
+        /* printf("  Object %p: marked=%d\n", (void*)obj, obj->marked); */
+        obj = obj->next_object;
+    }
+
     sweep_phase();
 }
 
@@ -191,9 +209,20 @@ void gc_write_barrier(object_t *parent, size_t slot, object_t *child) {
     // mark the child to maintain correctness
     if (gc_collection_in_progress && parent->marked && child && !child->marked) {
         pthread_mutex_lock(&gc_lock);
+        printf("-> parent marked? %d, child marked? %d\n", parent->marked, child ? child->marked : -1);
         mark_object(child);
         pthread_mutex_unlock(&gc_lock);
     }
 }
+
+int findObj(void *ptr) {
+    object_t *curr = all_objects;
+    while (curr) {
+        if (curr == ptr) return 1;
+        curr = curr->next_object;
+    }
+    return 0;
+}
+
 
 #endif // TB_GC

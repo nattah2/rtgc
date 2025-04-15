@@ -1,0 +1,73 @@
+#include "tb_gc.h"
+#include <stdio.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <assert.h>
+
+// Duplicated from tb_gc.c — for testing only
+typedef struct object {
+    size_t size;
+    uint8_t marked;
+    struct object **children;
+    size_t child_count;
+    struct object *next_object;
+} object_t;
+
+object_t *extract_object(void *user_ptr, size_t child_count) {
+    return (object_t *)((uint8_t *)user_ptr - sizeof(object_t) - sizeof(object_t *) * child_count);
+}
+
+void test_extract_object() {
+    size_t child_count = 2;
+    void *user_ptr = gc_alloc(0, child_count);  // Allocate with 2 child slots
+    object_t *obj = extract_object(user_ptr, child_count);
+
+    // Verify the child pointer array starts right after the header
+    assert(obj->children == (object_t **)(obj + 1));
+
+    // Verify user_ptr points to the first byte after child pointers
+    assert((void *)(obj->children + child_count) == user_ptr);
+
+    printf("extract_object() test passed!\n");
+}
+
+void test_gc() {
+    printf("Allocating object graph...\n");
+
+    void *root_user = gc_alloc(0, 1);  // root with 1 child
+    void *a_user    = gc_alloc(0, 1);  // a with 1 child
+    void *b_user    = gc_alloc(0, 1);  // b with 1 child
+    void *c_user    = gc_alloc(0, 0);  // c with no children
+    void *d_user    = gc_alloc(0, 0);  // d (unreachable)
+
+    object_t *root = extract_object(root_user, 1);
+    object_t *a = extract_object(a_user, 1);
+    object_t *b = extract_object(b_user, 1);
+    object_t *c = extract_object(c_user, 0);
+    object_t *d = extract_object(d_user, 0);
+
+    gc_add_root(root);
+    gc_write_barrier(root, 0, a);
+    gc_write_barrier(a, 0, b);
+    gc_write_barrier(b, 0, c);
+    // `d` is not connected
+
+    printf("Running GC...\n");
+    gc_collect_full();
+
+
+    printf("Post-GC:\n");
+    printf("root alive: %s\n", root->marked ? "yes" : "no");
+    printf("a alive: %s\n", a->marked ? "yes" : "no");
+    printf("b alive: %s\n", b->marked ? "yes" : "no");
+    printf("c alive: %s\n", c->marked ? "yes" : "no");
+    printf("d alive: %s (should be no)\n", d->marked ? "yes" : "no");
+}
+
+
+int main() {
+    gc_init();
+    test_gc();
+    /* test_extract_object(); */
+    return 0;
+}
